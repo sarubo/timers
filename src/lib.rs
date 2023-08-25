@@ -30,7 +30,7 @@ impl FromStr for Hms {
             .collect();
         if len == filtered.len() {
             return Err("There is a non-numeric input".to_owned());
-        } else if len < 1 || len > 3 {
+        } else if !(1..=3).contains(&len) {
             return Err("You must follow [[hour:]minute:]second".to_owned());
         }
         let mut i = filtered.into_iter().rev();

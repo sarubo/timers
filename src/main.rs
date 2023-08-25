@@ -2,7 +2,7 @@ use crossterm::{
     cursor::{MoveToNextLine, MoveToPreviousLine},
     event::{read, Event, KeyCode, KeyEvent, KeyEventKind},
     style::Print,
-    terminal::{Clear, ClearType},
+    terminal::{self, Clear, ClearType},
     QueueableCommand,
 };
 use seahorse::{App, Context, Flag, FlagType};
@@ -22,7 +22,6 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     App::new(env!("CARGO_PKG_NAME"))
         .description(env!("CARGO_PKG_DESCRIPTION"))
-        // .author(env!("CARGO_PKG_AUTHORS"))
         .version(env!("CARGO_PKG_VERSION"))
         .usage("timers [OPTIONS]")
         .action(default_action)
@@ -50,16 +49,17 @@ fn spawn_stdin_channel() -> Receiver<KeyEvent> {
     let (tx, rx) = mpsc::channel::<KeyEvent>();
     thread::spawn(move || loop {
         let res: Result<Event, io::Error> = read();
-        let res: Result<(), String> = match res {
+        let res: Result<(), &str> = match res {
             Ok(e) => match e {
                 Event::Key(key) => tx
                     .send(key)
-                    .map_err(|_| "failed to communicate between threads".to_owned()),
+                    .map_err(|_| "failed to communicate between threads"),
                 _ => Ok(()),
             },
-            Err(_) => Err("failed to read from standard input".to_owned()),
+            Err(_) => Err("failed to read from standard input"),
         };
         if let Err(s) = res {
+            terminal::disable_raw_mode().unwrap();
             println!("{}", s);
             println!("read task is killing");
             break;
@@ -76,10 +76,13 @@ fn stopwatch_task() {
     println!("stop at <Space> or <k> or <Esc>");
     println!("start");
     println!("exit at <q> or <Esc> or <Enter>");
+    if terminal::enable_raw_mode().is_err() {
+        println!("terminal can't change to raw mode");
+        return;
+    }
     let mut based_time: Instant = Instant::now();
     let mut saved_duration: Duration = Duration::ZERO;
     let mut timer: Timer = Timer::RUN;
-    // TODO: readは10msごとに更新して、io.writeは100msごとに更新するようにthreadを上手く使う
     let stdin_channel: Receiver<KeyEvent> = spawn_stdin_channel();
     let exit_message: &str = loop {
         match stdin_channel.try_recv() {
@@ -93,8 +96,7 @@ fn stopwatch_task() {
                             Timer::RUN => {
                                 timer = Timer::STOP;
                                 saved_duration += based_time.elapsed();
-                                let r: Result<(), io::Error> = print_hms(saved_duration, &timer);
-                                if let Err(_) = r {
+                                if print_hms(saved_duration, &timer).is_err() {
                                     break "stdout write error";
                                 }
                             }
@@ -110,8 +112,7 @@ fn stopwatch_task() {
             Err(TryRecvError::Empty) => {
                 if timer == Timer::RUN {
                     let duration: Duration = saved_duration + based_time.elapsed();
-                    let r: Result<(), io::Error> = print_hms(duration, &timer);
-                    if let Err(_) = r {
+                    if print_hms(duration, &timer).is_err() {
                         break "stdout write error";
                     }
                 }
@@ -122,7 +123,8 @@ fn stopwatch_task() {
             }
         }
     };
-    println!("{}", exit_message.to_owned());
+    terminal::disable_raw_mode().unwrap();
+    println!("{}", exit_message);
 }
 
 fn print_hms(now: Duration, timer: &Timer) -> Result<(), io::Error> {
