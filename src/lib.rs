@@ -11,9 +11,9 @@ pub struct Hms {
 }
 
 impl Hms {
-    pub fn to_duration(hms: Hms) -> Duration {
-        let secs = hms.hour * 60 * 60 + hms.min * 60 + hms.sec;
-        let nanos = hms.subsec * 1_000_000;
+    pub fn to_duration(&self) -> Duration {
+        let secs = self.hour * 60 * 60 + self.min * 60 + self.sec;
+        let nanos = self.subsec * 1_000_000;
         Duration::new(secs, nanos)
     }
 }
@@ -28,7 +28,7 @@ impl FromStr for Hms {
             .into_iter()
             .filter_map(|s: &str| s.parse::<u64>().ok())
             .collect();
-        if len == filtered.len() {
+        if len != filtered.len() {
             return Err("There is a non-numeric input".to_owned());
         } else if !(1..=3).contains(&len) {
             return Err("You must follow [[hour:]minute:]second".to_owned());

@@ -5,7 +5,7 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
     QueueableCommand,
 };
-use seahorse::{App, Context, Flag, FlagType};
+use seahorse::{App, Context};
 use std::{
     env,
     io::{self, Write},
@@ -16,32 +16,36 @@ use std::{
 };
 use timers::{Hms, Timer};
 
-const FLAG_NAME_COUNT_DOWN: &str = "count-down";
-
 fn main() {
     let args: Vec<String> = env::args().collect();
     App::new(env!("CARGO_PKG_NAME"))
         .description(env!("CARGO_PKG_DESCRIPTION"))
         .version(env!("CARGO_PKG_VERSION"))
         .usage("timers [OPTIONS]")
-        .action(default_action)
-        .flag(
-            Flag::new(FLAG_NAME_COUNT_DOWN, FlagType::String)
+        .command(
+            seahorse::Command::new("countdown")
+                .alias("c")
                 .description("<string> of [[hour:]minute:]second like 1:23:45 or 1:00 or 30")
-                .alias("c"),
+                .action(countdown_action),
         )
+        .command(
+            seahorse::Command::new("stopwatch")
+                .alias("s")
+                .description("start stop watch")
+                .action(|_| loop_task(None)),
+        )
+        .action(|c| c.help())
         .run(args);
 }
 
-fn default_action(c: &Context) {
-    if let Ok(time) = c.string_flag(FLAG_NAME_COUNT_DOWN) {
-        let hms: Result<Hms, String> = Hms::from_str(&time);
-        match hms {
-            Err(s) => println!("{}", s),
-            Ok(hms) => count_down_task(hms),
-        };
-    } else {
-        stopwatch_task()
+fn countdown_action(c: &Context) {
+    if c.args.is_empty() {
+        println!("need <string> of [[hour:]minute:]second");
+    } else if let Some(s) = c.args.get(0) {
+        match Hms::from_str(s) {
+            Ok(hms) => loop_task(Some(hms)),
+            Err(s) => println!("{s}"),
+        }
     }
 }
 
@@ -68,63 +72,117 @@ fn spawn_stdin_channel() -> Receiver<KeyEvent> {
     rx
 }
 
-fn count_down_task(hms: Hms) {
-    println!("{}", hms);
-}
-
-fn stopwatch_task() {
-    println!("stop at <Space> or <k> or <Esc>");
-    println!("start");
+fn loop_task(hms: Option<Hms>) {
+    println!("stop at <k> or <Space>");
     println!("exit at <q> or <Esc> or <Enter>");
+    println!("start");
     if terminal::enable_raw_mode().is_err() {
         println!("terminal can't change to raw mode");
         return;
     }
     let mut based_time: Instant = Instant::now();
-    let mut saved_duration: Duration = Duration::ZERO;
+    let mut saved_duration: Duration = match hms {
+        Some(hms) => hms.to_duration(),
+        None => Duration::ZERO,
+    };
     let mut timer: Timer = Timer::RUN;
     let stdin_channel: Receiver<KeyEvent> = spawn_stdin_channel();
-    let exit_message: &str = loop {
+    let exit_message: String = loop {
         match stdin_channel.try_recv() {
             Ok(key) => {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => {
-                            break "finish!";
-                        }
-                        KeyCode::Char(' ') | KeyCode::Char('k') => match timer {
-                            Timer::RUN => {
-                                timer = Timer::STOP;
-                                saved_duration += based_time.elapsed();
-                                if print_hms(saved_duration, &timer).is_err() {
-                                    break "stdout write error";
-                                }
-                            }
-                            Timer::STOP => {
-                                timer = Timer::RUN;
-                                based_time = Instant::now();
-                            }
-                        },
-                        _ => (),
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => {
+                        break "finish!".to_owned();
                     }
+                    KeyCode::Char(' ') | KeyCode::Char('k') => match timer {
+                        Timer::RUN => {
+                            timer = Timer::STOP;
+                            match calculate_and_print_duraition(
+                                &hms,
+                                &saved_duration,
+                                &based_time,
+                                &timer,
+                            ) {
+                                Ok(d) => saved_duration = d,
+                                Err(s) => break s,
+                            }
+                        }
+                        Timer::STOP => {
+                            timer = Timer::RUN;
+                            based_time = Instant::now();
+                        }
+                    },
+                    _ => (),
                 }
             }
             Err(TryRecvError::Empty) => {
                 if timer == Timer::RUN {
-                    let duration: Duration = saved_duration + based_time.elapsed();
-                    if print_hms(duration, &timer).is_err() {
-                        break "stdout write error";
+                    if let Err(s) =
+                        calculate_and_print_duraition(&hms, &saved_duration, &based_time, &timer)
+                    {
+                        break s;
                     }
                 }
                 thread::sleep(Duration::from_millis(100));
             }
             Err(TryRecvError::Disconnected) => {
-                break "Channel disconnected";
+                break "Channel disconnected".to_owned();
             }
         }
     };
     terminal::disable_raw_mode().unwrap();
     println!("{}", exit_message);
+}
+
+fn calculate_and_print_duraition(
+    hms: &Option<Hms>,
+    saved_duration: &Duration,
+    based_time: &Instant,
+    timer: &Timer,
+) -> Result<Duration, String> {
+    match hms {
+        Some(_) => {
+            let subed = sub_duration(saved_duration, based_time);
+            countdown_print(subed, timer)
+        }
+        None => {
+            let added = add_duration(saved_duration, based_time)?;
+            stopwatch_print(added, timer)
+        }
+    }
+}
+
+fn sub_duration(saved_duration: &Duration, based_time: &Instant) -> Duration {
+    saved_duration
+        .checked_sub(based_time.elapsed())
+        .unwrap_or(Duration::ZERO)
+}
+
+fn add_duration(saved_duration: &Duration, based_time: &Instant) -> Result<Duration, String> {
+    saved_duration
+        .checked_add(based_time.elapsed())
+        .ok_or("time is overflow".to_owned())
+}
+
+fn countdown_print(saved_duration: Duration, timer: &Timer) -> Result<Duration, String> {
+    if print_hms(saved_duration, timer).is_err() {
+        Err("stdout write error".to_owned())
+    } else if saved_duration.is_zero() {
+        Err("finish!".to_owned())
+    } else {
+        Ok(saved_duration)
+    }
+}
+
+fn stopwatch_print(saved_duration: Duration, timer: &Timer) -> Result<Duration, String> {
+    if print_hms(saved_duration, timer).is_err() {
+        Err("stdout write error".to_owned())
+    } else {
+        Ok(saved_duration)
+    }
 }
 
 fn print_hms(now: Duration, timer: &Timer) -> Result<(), io::Error> {
@@ -134,8 +192,8 @@ fn print_hms(now: Duration, timer: &Timer) -> Result<(), io::Error> {
     };
     io::stdout()
         .queue(Clear(ClearType::CurrentLine))
-        .and_then(|o| o.queue(MoveToPreviousLine(2)))
+        .and_then(|o| o.queue(MoveToPreviousLine(1)))
         .and_then(|o| o.queue(Print(format!("{state} {}", Hms::from(now)))))
-        .and_then(|o| o.queue(MoveToNextLine(2)))
+        .and_then(|o| o.queue(MoveToNextLine(1)))
         .and_then(|o| o.flush())
 }
