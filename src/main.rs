@@ -7,8 +7,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-#[cfg(target_family = "unix")]
-use termios::Termios;
 use timers::{disable_raw_mode, enable_raw_mode, Hms, Timer};
 
 fn main() {
