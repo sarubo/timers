@@ -1,6 +1,16 @@
+#[cfg(target_family = "unix")]
+mod unix;
+#[cfg(target_os = "windows")]
+mod windows;
+
 use std::fmt::Display;
 use std::str::FromStr;
 use std::time::Duration;
+
+#[cfg(target_family = "unix")]
+pub use self::unix::*;
+#[cfg(target_os = "windows")]
+pub use self::windows::*;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Hms {
