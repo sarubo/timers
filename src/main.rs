@@ -63,7 +63,8 @@ fn spawn_stdin_channel() -> Receiver<KeyEvent> {
             Err(_) => Err("failed to read from standard input"),
         };
         if let Err(s) = res {
-            terminal::disable_raw_mode().unwrap();
+            terminal::disable_raw_mode()
+                .unwrap_or_else(|_| println!("terminal can't change to raw mode"));
             println!("{}", s);
             println!("read task is killing");
             break;
@@ -133,7 +134,7 @@ fn loop_task(hms: Option<Hms>) {
             }
         }
     };
-    terminal::disable_raw_mode().unwrap();
+    terminal::disable_raw_mode().unwrap_or_else(|_| println!("terminal can't change to raw mode"));
     println!("{}", exit_message);
 }
 
